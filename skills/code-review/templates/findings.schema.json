@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:code-review-skill:findings:1.0",
+  "title": "Code review result",
+  "description": "Machine-readable form of one review: verdict, findings sorted by priority, optional QA and deployment sections, and the handoff. Field meanings follow SKILL.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review", "findings"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "tier", "verdict", "summary"],
+      "properties": {
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "enum": ["pull_request", "stack", "branch", "worktree", "staged", "commit", "range", "diff", "paths"]
+            },
+            "platform": { "enum": ["github", "gitlab", "bitbucket", "azure_devops", "gerrit", "other", null] },
+            "repo": { "type": ["string", "null"] },
+            "number": { "type": ["integer", "string", "null"], "description": "PR or MR number when the target is one." },
+            "base_ref": { "type": ["string", "null"] },
+            "base_sha": { "type": ["string", "null"], "description": "Merge-base the diff was taken from." },
+            "head_ref": { "type": ["string", "null"] },
+            "head_sha": { "type": ["string", "null"], "description": "Revision that was reviewed. Null for uncommitted work, raw diffs and plain files." },
+            "includes_working_tree": { "type": "boolean" },
+            "paths": { "type": "array", "items": { "type": "string" }, "description": "Files or directories, for whole-file review." }
+          }
+        },
+        "tier": { "enum": ["light", "standard", "deep"] },
+        "verdict": { "enum": ["approve", "approve_with_comments", "request_changes", "hold"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 600, "description": "The short review body." },
+        "validation": {
+          "type": "array",
+          "description": "What was actually checked, and how.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["what", "how"],
+            "properties": {
+              "what": { "type": "string" },
+              "how": { "enum": ["executed", "ci", "read"] },
+              "result": { "type": "string" }
+            }
+          }
+        },
+        "not_reviewed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "reason"],
+            "properties": { "path": { "type": "string" }, "reason": { "type": "string" } }
+          }
+        },
+        "unavailable": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What this target kind could not provide, for example CI results, threads or related changes."
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Sorted P0, P1, P2, then by impact. An empty array is a valid result.",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "qa_steps": {
+      "type": "array",
+      "description": "Optional. Omit or leave empty when nothing specific applies.",
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scenario", "kind", "do", "expect"],
+        "properties": {
+          "scenario": { "type": "string" },
+          "kind": { "enum": ["manual", "automated"] },
+          "covers": { "type": "string", "description": "The risk or the finding id this step retires." },
+          "setup": { "type": "string" },
+          "do": { "type": "string" },
+          "expect": { "type": "string" },
+          "watch": { "type": "string" }
+        }
+      }
+    },
+    "deployment": {
+      "type": ["object", "null"],
+      "description": "Optional. Null when order does not matter and no manual action is needed.",
+      "additionalProperties": false,
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["order", "phase", "action", "basis"],
+            "properties": {
+              "order": { "type": "integer", "minimum": 1 },
+              "phase": { "enum": ["before_deploy", "deploy", "after_deploy", "follow_up"] },
+              "action": { "type": "string" },
+              "why": { "type": "string" },
+              "verify": { "type": "string", "description": "How to confirm the step before the next one starts." },
+              "basis": { "enum": ["confirmed", "inferred"] }
+            }
+          }
+        },
+        "rollback": { "type": ["string", "null"] },
+        "point_of_no_return": { "type": ["string", "null"] },
+        "watch": { "type": "array", "items": { "type": "string" } },
+        "related_changes_scope": {
+          "enum": ["platform", "local", "not_checked"],
+          "description": "How far the search for related changes got."
+        },
+        "related_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "relation", "basis"],
+            "properties": {
+              "ref": { "type": "string", "description": "For example org/repo#123, a URL or a branch name." },
+              "relation": {
+                "enum": ["must_land_first", "must_land_after", "must_ship_together", "conflicts_with", "duplicates", "supersedes", "related"]
+              },
+              "basis": { "enum": ["stated", "same_ticket", "same_files", "shared_contract", "stack", "inferred"] },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "pre_existing": {
+      "type": "array",
+      "maxItems": 2,
+      "description": "Notable problems the change did not introduce. Never part of findings.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "note"],
+        "properties": {
+          "path": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "priority", "blocking", "type", "anchor", "title", "body", "confidence"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^F[0-9]+$" },
+        "priority": { "enum": ["P0", "P1", "P2"] },
+        "blocking": { "type": "boolean", "description": "Derived: true exactly when priority is P0." },
+        "type": {
+          "enum": [
+            "bug", "security", "reliability", "compatibility", "performance", "observability", "tests",
+            "design", "convention", "docs", "question", "suggestion", "nit"
+          ]
+        },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "body": { "type": "string", "minLength": 1 },
+        "suggestion": {
+          "type": ["string", "null"],
+          "description": "Complete replacement for the anchored lines. Only for line anchors."
+        },
+        "confidence": {
+          "enum": ["executed", "traced", "inferred"],
+          "description": "Evidence level, strongest first. An ordinal, not a probability."
+        },
+        "rule": {
+          "type": ["object", "null"],
+          "description": "Required for convention findings: the rule file and the quoted rule.",
+          "additionalProperties": false,
+          "required": ["source", "quote"],
+          "properties": { "source": { "type": "string" }, "quote": { "type": "string" } }
+        },
+        "status": {
+          "enum": ["open", "resolved", "superseded", "withdrawn", "accepted_risk", "not_verifiable"],
+          "default": "open"
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "Stable across rounds and line shifts. Derive it from type, path and the symbol or normalized title, never from line numbers."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "priority": { "const": "P0" } } },
+          "then": { "properties": { "blocking": { "const": true } } },
+          "else": { "properties": { "blocking": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["suggestion", "nit"] } } },
+          "then": { "properties": { "priority": { "const": "P2" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "convention" } } },
+          "then": { "required": ["rule"], "properties": { "rule": { "type": "object" } } }
+        }
+      ]
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["line", "file", "pr"] },
+        "path": { "type": ["string", "null"] },
+        "start_line": { "type": ["integer", "null"], "minimum": 1 },
+        "end_line": { "type": ["integer", "null"], "minimum": 1 },
+        "side": { "enum": ["new", "old", null], "description": "old for a removed line." },
+        "subject": { "type": ["string", "null"], "description": "For pr anchors: what is affected." },
+        "demoted_from": {
+          "enum": ["line", "file", null],
+          "description": "Set when a platform could not place the original anchor."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "line" } } },
+          "then": {
+            "required": ["path", "start_line", "end_line"],
+            "properties": {
+              "path": { "type": "string" },
+              "start_line": { "type": "integer" },
+              "end_line": { "type": "integer" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "file" } } },
+          "then": { "required": ["path"], "properties": { "path": { "type": "string" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "pr" } } },
+          "then": { "required": ["subject"], "properties": { "subject": { "type": "string" } } }
+        }
+      ]
+    }
+  }
+}

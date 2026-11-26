@@ -1,0 +1,6 @@
+{
+  "name": "code-review-skill",
+  "description": "Evidence-first code review skill: verifies every finding before raising it and gives a clear merge verdict. Skill only, no hooks.",
+  "version": "0.1.0",
+  "license": "MIT"
+}

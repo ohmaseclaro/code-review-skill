@@ -1,0 +1,196 @@
+{
+  "schema_version": "1.0",
+  "review": {
+    "target": {
+      "kind": "pull_request",
+      "platform": "github",
+      "repo": "example-org/orders",
+      "number": 412,
+      "base_ref": "main",
+      "base_sha": "9f2c1ab",
+      "head_ref": "feature/order-region",
+      "head_sha": "4be07d3",
+      "includes_working_tree": false
+    },
+    "tier": "deep",
+    "verdict": "request_changes",
+    "summary": "Requesting changes: see P0 findings. The region filter itself is correct; the migration and the retry path are not safe to ship as written.",
+    "validation": [
+      { "what": "orders test suite", "how": "executed", "result": "42 passed" },
+      { "what": "migration against a copy with existing rows", "how": "executed", "result": "fails on the NOT NULL constraint" },
+      { "what": "callers of chargeOrder", "how": "read", "result": "3 call sites, 1 retries on failure" },
+      { "what": "pipeline", "how": "ci", "result": "passing at 4be07d3" }
+    ],
+    "not_reviewed": [
+      { "path": "web/dist/", "reason": "generated output" }
+    ],
+    "unavailable": []
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "priority": "P0",
+      "blocking": true,
+      "type": "compatibility",
+      "anchor": {
+        "kind": "pr",
+        "path": null,
+        "start_line": null,
+        "end_line": null,
+        "side": null,
+        "subject": "migrations for orders.region",
+        "demoted_from": null
+      },
+      "title": "Add the backfill before the NOT NULL constraint",
+      "body": "The migration adds `orders.region NOT NULL` with no default and no backfill, and no other migration in this change sets it. Existing rows fail the constraint, so the deploy aborts. Add the column as nullable, backfill, then add the constraint in a later migration.",
+      "suggestion": null,
+      "confidence": "executed",
+      "rule": null,
+      "status": "open",
+      "fingerprint": "compatibility:db/migrate:orders.region-not-null-without-backfill"
+    },
+    {
+      "id": "F2",
+      "priority": "P0",
+      "blocking": true,
+      "type": "reliability",
+      "anchor": {
+        "kind": "line",
+        "path": "src/billing/charge.ts",
+        "start_line": 88,
+        "end_line": 93,
+        "side": "new",
+        "subject": null,
+        "demoted_from": null
+      },
+      "title": "Surface the failed charge instead of returning success",
+      "body": "When the gateway times out, the `catch` logs and returns `{ ok: true }`, so the order ships unpaid. P0 because money is lost silently. Rethrow, or return the failure and let the caller retry with the idempotency key.",
+      "suggestion": null,
+      "confidence": "traced",
+      "rule": null,
+      "status": "open",
+      "fingerprint": "reliability:src/billing/charge.ts:chargeOrder-timeout-returns-success"
+    },
+    {
+      "id": "F3",
+      "priority": "P1",
+      "blocking": false,
+      "type": "convention",
+      "anchor": {
+        "kind": "line",
+        "path": "src/orders/handler.ts",
+        "start_line": 41,
+        "end_line": 44,
+        "side": "new",
+        "subject": null,
+        "demoted_from": null
+      },
+      "title": "Return this failure through apiError()",
+      "body": "The new branch builds the 404 by hand, so clients get a different error shape. Use `return apiError(404, 'order_not_found')`.",
+      "suggestion": "    return apiError(404, 'order_not_found');",
+      "confidence": "traced",
+      "rule": {
+        "source": "AGENTS.md, section \"Errors\"",
+        "quote": "Handlers must return failures through `apiError()`, never a hand-built response."
+      },
+      "status": "open",
+      "fingerprint": "convention:src/orders/handler.ts:hand-built-404"
+    },
+    {
+      "id": "F4",
+      "priority": "P2",
+      "blocking": false,
+      "type": "suggestion",
+      "anchor": {
+        "kind": "file",
+        "path": "src/orders/region.ts",
+        "start_line": null,
+        "end_line": null,
+        "side": null,
+        "subject": null,
+        "demoted_from": "line"
+      },
+      "title": "Reuse normalizeRegion() from the shipping module",
+      "body": "Location: src/orders/region.ts:12-30 (not anchored: outside the diff). `toRegionCode` repeats `normalizeRegion` in `src/shipping/region.ts` with one extra alias. Add the alias there and call it, so the two lists cannot drift.",
+      "suggestion": null,
+      "confidence": "inferred",
+      "rule": null,
+      "status": "open",
+      "fingerprint": "suggestion:src/orders/region.ts:duplicate-region-normalization"
+    }
+  ],
+  "qa_steps": [
+    {
+      "scenario": "Run the migration against a database that already has orders",
+      "kind": "manual",
+      "covers": "F1",
+      "setup": "A staging copy with at least one order created before this change",
+      "do": "Apply the migrations in order, then run the backfill",
+      "expect": "Every row has a region and the constraint is added without error",
+      "watch": "Migration duration and lock wait on the orders table"
+    },
+    {
+      "scenario": "Gateway timeout during checkout",
+      "kind": "automated",
+      "covers": "F2",
+      "setup": "Payment client stubbed to time out once, then succeed",
+      "do": "Submit one order",
+      "expect": "One charge, one shipped order, no order shipped while the charge is unpaid",
+      "watch": "Count of charge attempts per idempotency key"
+    }
+  ],
+  "deployment": {
+    "steps": [
+      {
+        "order": 1,
+        "phase": "before_deploy",
+        "action": "Merge and deploy the API change that adds region to the order payload",
+        "why": "This change reads the field and rejects orders without it",
+        "verify": "The staging API returns region on new orders",
+        "basis": "confirmed"
+      },
+      {
+        "order": 2,
+        "phase": "deploy",
+        "action": "Run the migration that adds orders.region as nullable",
+        "why": "Old code keeps writing rows without the column during the rollout",
+        "basis": "inferred"
+      },
+      {
+        "order": 3,
+        "phase": "after_deploy",
+        "action": "Run the backfill, then add the NOT NULL constraint",
+        "why": "The constraint fails while any row is null",
+        "verify": "A count of rows with a null region returns 0",
+        "basis": "inferred"
+      }
+    ],
+    "rollback": "Steps 1 and 2 are reversible by redeploying the previous version: the nullable column can stay.",
+    "point_of_no_return": "The NOT NULL constraint: after it, the previous version can no longer insert orders.",
+    "watch": [
+      "Order creation error rate for one hour after step 3",
+      "Checkout latency during the backfill"
+    ],
+    "related_changes_scope": "platform",
+    "related_changes": [
+      {
+        "ref": "example-org/api#77",
+        "relation": "must_land_first",
+        "basis": "stated",
+        "note": "Adds region to the order payload"
+      },
+      {
+        "ref": "example-org/orders#409",
+        "relation": "conflicts_with",
+        "basis": "same_files",
+        "note": "Also edits src/orders/handler.ts: expect a merge conflict"
+      }
+    ]
+  },
+  "pre_existing": [
+    { "path": "src/orders/list.ts", "line": 58, "note": "Unbounded page size, unrelated to this change" }
+  ],
+  "limitations": [
+    "Production table size is unknown, so the backfill duration is an estimate"
+  ]
+}
